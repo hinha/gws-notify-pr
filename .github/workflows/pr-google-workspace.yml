@@ -1,0 +1,90 @@
+name: PR → Google Workspace (Chat)
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  notify-google-chat:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build Google Chat message
+        id: msg
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_STATE: ${{ github.event.pull_request.state }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BASE: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.ref }}
+          PR_COMMITS: ${{ github.event.pull_request.commits }}
+          PR_ADDITIONS: ${{ github.event.pull_request.additions }}
+          PR_DELETIONS: ${{ github.event.pull_request.deletions }}
+          PR_CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          ACTION: ${{ github.event.action }}
+          LABELS_JSON: ${{ toJson(github.event.pull_request.labels) }}
+          REVIEWERS_JSON: ${{ toJson(github.event.pull_request.requested_reviewers) }}
+        run: |
+          # Ekstrak labels & reviewers ringkas
+          LABELS=$(echo "${LABELS_JSON}" | jq -r 'map(.name) | join(", ") // "-"')
+          REVIEWERS=$(echo "${REVIEWERS_JSON}" | jq -r 'map(.login) | join(", ") // "-"')
+
+          # Buat kartu Google Chat (card v1)
+          cat > card.json <<'JSON'
+          {
+            "cardsV2": [
+              {
+                "cardId": "prNotification",
+                "card": {
+                  "header": {
+                    "title": "🔀 Pull Request Notification",
+                    "subtitle": "Repository: ${{ github.repository }}",
+                    "imageUrl": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+                    "imageType": "CIRCLE"
+                  },
+                  "sections": [
+                    {
+                      "header": "PR #${PR_NUMBER}: ${PR_TITLE}",
+                      "collapsible": false,
+                      "widgets": [
+                        { "decoratedText": { "topLabel": "Author", "text": "${PR_AUTHOR}" } },
+                        { "decoratedText": { "topLabel": "Action", "text": "${ACTION}" } },
+                        { "decoratedText": { "topLabel": "State", "text": "${PR_STATE}", "bottomText": "Draft: ${PR_DRAFT}" } },
+                        { "decoratedText": { "topLabel": "Base ← Head", "text": "${PR_BASE} \u2190 ${PR_HEAD}" } },
+                        { "decoratedText": { "topLabel": "Labels", "text": "${LABELS}" } },
+                        { "decoratedText": { "topLabel": "Reviewers", "text": "${REVIEWERS}" } },
+                        { "decoratedText": { "topLabel": "Changes", "text": "${PR_COMMITS} commits, +${PR_ADDITIONS}/-${PR_DELETIONS}, ${PR_CHANGED_FILES} files" } },
+                        {
+                          "buttonList": {
+                            "buttons": [
+                              { "text": "Open PR", "onClick": { "openLink": { "url": "${PR_URL}" } } },
+                              { "text": "Diff", "onClick": { "openLink": { "url": "${PR_URL}/files" } } },
+                              { "text": "Checks", "onClick": { "openLink": { "url": "${PR_URL}/checks" } } }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+          JSON
+
+          # Export ke environment untuk step berikutnya
+          echo "CARD=$(cat card.json | jq -c .)" >> $GITHUB_OUTPUT
+
+      - name: Send to Google Chat
+        env:
+          WEBHOOK: ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
+          PAYLOAD: ${{ steps.msg.outputs.CARD }}
+        run: |
+          curl -sS -X POST -H "Content-Type: application/json" -d "${PAYLOAD}" "${WEBHOOK}" \
+          | jq -r '.' || true
