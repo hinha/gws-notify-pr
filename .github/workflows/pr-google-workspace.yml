@@ -101,9 +101,23 @@ jobs:
         env:
           WEBHOOK: ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
           PAYLOAD: ${{ steps.build.outputs.payload }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           if [ -z "$WEBHOOK" ]; then
             echo "Missing GOOGLE_CHAT_WEBHOOK_URL secret"; exit 1
           fi
+          
+          sudo apt-get update -y && sudo apt-get install -y jq
+          
+          THREAD="pr-${PR_NUMBER}"
+          THREAD_ENC=$(printf '%s' "$THREAD" | jq -sRr @uri)
+          
+          # append threadKey di query string
+          if [[ "$WEBHOOK" == *\?* ]]; then
+            URL="${WEBHOOK}&threadKey=${THREAD_ENC}"
+          else
+            URL="${WEBHOOK}?threadKey=${THREAD_ENC}"
+          fi
+          
           curl -sS -X POST -H "Content-Type: application/json" \
-            -d "$PAYLOAD" "$WEBHOOK" | jq -r '.' || true
+               -d "$PAYLOAD" "$URL" | jq -r '.' || true
