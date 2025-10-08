@@ -3,6 +3,9 @@ name: PR → Google Chat
 on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft, labeled, unlabeled, closed]
+  schedule:
+    # jalan tiap jam (sesuaikan)
+    - cron: "0 * * * *"
 
 permissions:
   contents: read
@@ -109,18 +112,18 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           sudo apt-get update -y && sudo apt-get install -y jq
-          # Ambil hingga 50 commit, lalu ambil 5 terakhir
+          # grab last 5 commits
           COMMITS_JSON=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=50")
 
           # Format: shortSHA – title (author)
-          COMMITS_TEXT=$(echo "$COMMITS_JSON" | jq -r '.[-5:] | map("* " + (.sha[0:7]) + " – " + (.commit.message | split("\n")[0]) + " (@" + .author.login + ")") | join("\n")')
-          # Fallback kalau kosong
+          COMMITS_TEXT=$(echo "$COMMITS_JSON" | jq -r '.[-3:] | map("* " + (.sha[0:7]) + " – " + (.commit.message | split("\n")[0]) + " (@" + .author.login + ")") | join("\n")')
+          # Fallback if empty
           if [ -z "$COMMITS_TEXT" ] || [ "$COMMITS_TEXT" == "null" ]; then
             COMMITS_TEXT="(no commits found)"
           fi
-          # Simpan output satu baris (escape newline untuk JSON/text)
+          
           echo "commits=$(printf '%s' "$COMMITS_TEXT" | awk '{printf "%s\\n",$0}')" >> $GITHUB_OUTPUT
 
       - name: Send to Google Chat (mention + card + commits)
@@ -151,12 +154,131 @@ jobs:
           MENTION=$(jq -n --arg t "<users/all> PR #${PR_NUMBER}: ${PR_TITLE} — ${PR_URL}" '{text: $t}')
           curl -sS -X POST -H "Content-Type: application/json; charset=UTF-8" -d "$MENTION" "$URL" | jq -r '.' || true
 
-          # 2) Kalau synchronize, kirim ringkasan commits
+          # 2)  synchronize, send summary commits
           if [ "$ACTION" = "synchronize" ]; then
             COMM_PAYLOAD=$(jq -n --arg c "$COMMITS" '{text: ("New commits:\n" + $c)}')
             curl -sS -X POST -H "Content-Type: application/json; charset=UTF-8" -d "$COMM_PAYLOAD" "$URL" | jq -r '.' || true
           fi
 
-          # 3) Kirim card
+          # 3) send card
           CLEAN=$(printf '%s' "$PAYLOAD" | jq 'if has("message") then .message else . end | del(.threadKey)')
           curl -sS -X POST -H "Content-Type: application/json; charset=UTF-8" -d "$CLEAN" "$URL" | jq -r '.' || true
+
+  remind-stale-prs:
+    if: ${{ github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    env:
+      REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      WEBHOOK: ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
+      # berapa lama sejak update terakhir sebelum di-remind (jam)
+      REMIND_AFTER_HOURS: "6"
+    steps:
+      - name: Sanity deps
+        run: |
+          if [ -z "$WEBHOOK" ]; then echo "Missing GOOGLE_CHAT_WEBHOOK_URL"; exit 1; fi
+          sudo apt-get update -y && sudo apt-get install -y jq coreutils
+
+      - name: Fetch open PRs (max 100) & filter yang butuh reminder
+        id: pick
+        run: |
+          NOW_EPOCH=$(date -u +%s)
+          THRESH=$(( ${REMIND_AFTER_HOURS} * 3600 ))
+          
+          PRS=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
+                     -H "Accept: application/vnd.github+json" \
+                     "https://api.github.com/repos/${REPO}/pulls?state=open&per_page=100")
+          
+          # Simpan PR yang bukan draft dan lama (update > threshold) ke file
+          echo "$PRS" | jq -r --arg now "$NOW_EPOCH" --argjson thr "$THRESH" '
+            .[] 
+            | select(.draft == false)
+            | . as $pr
+            | ($pr.updated_at | sub("Z$";"+00:00")) as $upd
+            | ( ($upd | fromdateiso8601) ) as $upd_epoch
+            | select( ( ( ($now|tonumber) - $upd_epoch ) > $thr ) )
+            | {number: .number, title: .title, url: .html_url, base: .base.ref, head: .head.ref, author: .user.login}
+          ' > stale_prs.json
+          
+          COUNT=$(jq 'length' stale_prs.json)
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+
+      - name: Remind each stale PR (no APPROVED reviews)
+        if: ${{ steps.pick.outputs.count != '0' }}
+        run: |
+          jq -c '.[]' stale_prs.json | while read -r PR; do
+            NUM=$(echo "$PR" | jq -r '.number')
+            TITLE=$(echo "$PR" | jq -r '.title')
+            URL=$(echo "$PR" | jq -r '.url')
+            BASE=$(echo "$PR" | jq -r '.base')
+            HEAD=$(echo "$PR" | jq -r '.head')
+            AUTHOR=$(echo "$PR" | jq -r '.author')
+          
+            # check if was  APPROVED or not
+            REVIEWS=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
+                             -H "Accept: application/vnd.github+json" \
+                             "https://api.github.com/repos/${REPO}/pulls/${NUM}/reviews?per_page=100")
+          
+            APPROVED=$(echo "$REVIEWS" | jq '[.[] | select(.state=="APPROVED")] | length')
+          
+            if [ "$APPROVED" -ge 1 ]; then
+              echo "PR #$NUM sudah ada APPROVED ($APPROVED). Skip."
+              continue
+            fi
+          
+            # Thread per-PR 
+            THREAD_ENC=$(printf 'pr-%s' "$NUM" | jq -sRr @uri)
+            if [[ "$WEBHOOK" == *\?* ]]; then
+              URL_HOOK="${WEBHOOK}&threadKey=${THREAD_ENC}"
+            else
+              URL_HOOK="${WEBHOOK}?threadKey=${THREAD_ENC}"
+            fi
+          
+            # 1) Mention @all (plain text)
+            MENTION=$(jq -n --arg t "<users/all> Reminder: PR #${NUM} belum di-review/approve — ${URL}" '{text: $t}')
+            curl -sS -X POST -H "Content-Type: application/json; charset=UTF-8" \
+                 -d "$MENTION" "$URL_HOOK" >/dev/null || true
+          
+            # 2) Card status PR
+            CARD=$(
+              jq -n \
+                --arg repo "$REPO" \
+                --arg num "$NUM" \
+                --arg title "$TITLE" \
+                --arg url "$URL" \
+                --arg base "$BASE" \
+                --arg head "$HEAD" \
+                --arg author "$AUTHOR" \
+                '{
+                  cardsV2: [{
+                    cardId: "prReminder",
+                    card: {
+                      header: {
+                        title: "⏰ PR Reminder",
+                        subtitle: ("Repository: " + $repo),
+                        imageUrl: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+                        imageType: "CIRCLE"
+                      },
+                      sections: [{
+                        header: ("PR #"+$num+": "+$title),
+                        collapsible: false,
+                        widgets: [
+                          { decoratedText: { topLabel:"Author", text:$author } },
+                          { decoratedText: { topLabel:"Status", text:"OPEN (no approvals yet)" } },
+                          { decoratedText: { topLabel:"Base ← Head", text:($base + " ← " + $head) } },
+                          { buttonList: { buttons: [
+                            { text:"Open PR", onClick:{ openLink:{ url:$url } } },
+                            { text:"Diff",    onClick:{ openLink:{ url:($url + "/files") } } },
+                            { text:"Checks",  onClick:{ openLink:{ url:($url + "/checks") } } }
+                          ]}}
+                        ]
+                      }]
+                    }
+                  }]
+                }'
+            )
+          
+            curl -sS -X POST -H "Content-Type: application/json; charset=UTF-8" \
+                 -d "$CARD" "$URL_HOOK" >/dev/null || true
+            echo "Reminded PR #$NUM"
+          done
