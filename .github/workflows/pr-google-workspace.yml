@@ -4,7 +4,6 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft, labeled, unlabeled, closed]
   schedule:
-    # jalan tiap jam (sesuaikan)
     - cron: "0 * * * *"
 
 permissions:
@@ -171,8 +170,8 @@ jobs:
       REPO: ${{ github.repository }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       WEBHOOK: ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
-      # berapa lama sejak update terakhir sebelum di-remind (jam)
-      REMIND_AFTER_HOURS: "6"
+      # how long last update before remind (hour)
+      REMIND_AFTER_HOURS: "1"
     steps:
       - name: Sanity deps
         run: |
