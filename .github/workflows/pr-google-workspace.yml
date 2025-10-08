@@ -2,7 +2,7 @@ name: PR → Google Chat
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft, labeled, unlabeled]
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft, labeled, unlabeled, closed]
 
 jobs:
   notify:
@@ -11,6 +11,8 @@ jobs:
       - name: Prepare message JSON (cardsV2)
         id: build
         env:
+          REPO:     ${{ github.repository }}
+          ACTION:   ${{ github.event.action }}
           PR_TITLE:  ${{ github.event.pull_request.title }}
           PR_URL:    ${{ github.event.pull_request.html_url }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -39,25 +41,28 @@ jobs:
                 "card": {
                   "header": {
                     "title": "🔀 Pull Request Notification",
-                    "subtitle": "Repository: hinha/gws-notify-pr",
+                    "subtitle": "Repository: __REPO__",
                     "imageUrl": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
                     "imageType": "CIRCLE"
                   },
                   "sections": [
                     {
-                      "header": "PR #123: Fix build",
+                      "header": "PR #__PR_NUMBER__: __PR_TITLE__",
                       "collapsible": false,
                       "widgets": [
-                        { "decoratedText": { "topLabel": "Author", "text": "hinha" } },
-                        { "decoratedText": { "topLabel": "Action", "text": "opened" } },
-                        { "decoratedText": { "topLabel": "State", "text": "open", "bottomLabel": "Draft: false", "wrapText": true } },
-                        { "decoratedText": { "topLabel": "Base ← Head", "text": "main ← feature/x" } },
+                        { "decoratedText": { "topLabel": "Author", "text": "__PR_AUTHOR__" } },
+                        { "decoratedText": { "topLabel": "Action", "text": "__ACTION__" } },
+                        { "decoratedText": { "topLabel": "State", "text": "__PR_STATE__", "bottomLabel": "Draft: __PR_DRAFT__", "wrapText": true } },
+                        { "decoratedText": { "topLabel": "Base ← Head", "text": "__PR_BASE__ ← __PR_HEAD__" } },
+                        { "decoratedText": { "topLabel": "Labels", "text": "__LABELS__", "wrapText": true } },
+                        { "decoratedText": { "topLabel": "Reviewers", "text": "__REVIEWERS__", "wrapText": true } },
+                        { "decoratedText": { "topLabel": "Changes", "text": "__PR_COMMITS__ commits, +__PR_ADDITIONS__/-__PR_DELETIONS__, __PR_CHANGED_FILES__ files" } },
                         {
                           "buttonList": {
                             "buttons": [
-                              { "text": "Open PR", "onClick": { "openLink": { "url": "https://github.com/org/repo/pull/123" } } },
-                              { "text": "Diff",    "onClick": { "openLink": { "url": "https://github.com/org/repo/pull/123/files" } } },
-                              { "text": "Checks",  "onClick": { "openLink": { "url": "https://github.com/org/repo/pull/123/checks" } } }
+                              { "text": "Open PR", "onClick": { "openLink": { "url": "__PR_URL__" } } },
+                              { "text": "Diff",    "onClick": { "openLink": { "url": "__PR_URL__/files" } } },
+                              { "text": "Checks",  "onClick": { "openLink": { "url": "__PR_URL__/checks" } } }
                             ]
                           }
                         }
@@ -66,12 +71,15 @@ jobs:
                   ]
                 }
               }
-            ]
+            ],
+            "threadKey": "pr-__PR_NUMBER__"
           }
           JSON
 
-          # Substitusi placeholder manual biar aman dari shell expansion
+          # Substitusi placeholder aman dari shell expansion
           sed -i \
+            -e "s|__REPO__|${REPO}|g" \
+            -e "s|__ACTION__|${ACTION}|g" \
             -e "s|__PR_NUMBER__|${PR_NUMBER}|g" \
             -e "s|__PR_TITLE__|$(printf '%s' "${PR_TITLE}"   | sed 's/[&/\]/\\&/g')|g" \
             -e "s|__PR_AUTHOR__|${PR_AUTHOR}|g" \
