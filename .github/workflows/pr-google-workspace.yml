@@ -1,90 +1,98 @@
-name: PR → Google Workspace (Chat)
+name: PR → Google Chat
 
 on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft, labeled, unlabeled]
 
-permissions:
-  contents: read
-  pull-requests: read
-
 jobs:
-  notify-google-chat:
+  notify:
     runs-on: ubuntu-latest
     steps:
-      - name: Build Google Chat message
-        id: msg
+      - name: Prepare message JSON (cardsV2)
+        id: build
         env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_TITLE:  ${{ github.event.pull_request.title }}
+          PR_URL:    ${{ github.event.pull_request.html_url }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_STATE: ${{ github.event.pull_request.state }}
-          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          PR_STATE:  ${{ github.event.pull_request.state }}
+          PR_DRAFT:  ${{ github.event.pull_request.draft }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          PR_BASE: ${{ github.event.pull_request.base.ref }}
-          PR_HEAD: ${{ github.event.pull_request.head.ref }}
-          PR_COMMITS: ${{ github.event.pull_request.commits }}
-          PR_ADDITIONS: ${{ github.event.pull_request.additions }}
-          PR_DELETIONS: ${{ github.event.pull_request.deletions }}
-          PR_CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
-          ACTION: ${{ github.event.action }}
-          LABELS_JSON: ${{ toJson(github.event.pull_request.labels) }}
-          REVIEWERS_JSON: ${{ toJson(github.event.pull_request.requested_reviewers) }}
+          PR_BASE:   ${{ github.event.pull_request.base.ref }}
+          PR_HEAD:   ${{ github.event.pull_request.head.ref }}
+          PR_COMMITS:        ${{ github.event.pull_request.commits }}
+          PR_ADDITIONS:      ${{ github.event.pull_request.additions }}
+          PR_DELETIONS:      ${{ github.event.pull_request.deletions }}
+          PR_CHANGED_FILES:  ${{ github.event.pull_request.changed_files }}
+          LABELS_JSON:       ${{ toJson(github.event.pull_request.labels) }}
+          REVIEWERS_JSON:    ${{ toJson(github.event.pull_request.requested_reviewers) }}
         run: |
-          # Ekstrak labels & reviewers ringkas
+          sudo apt-get update -y && sudo apt-get install -y jq
+
           LABELS=$(echo "${LABELS_JSON}" | jq -r 'map(.name) | join(", ") // "-"')
           REVIEWERS=$(echo "${REVIEWERS_JSON}" | jq -r 'map(.login) | join(", ") // "-"')
 
-          # Buat kartu Google Chat (card v1)
-          cat > card.json <<'JSON'
+          cat > payload.json <<'JSON'
           {
-            "cardsV2": [
-              {
-                "cardId": "prNotification",
-                "card": {
-                  "header": {
-                    "title": "🔀 Pull Request Notification",
-                    "subtitle": "Repository: ${{ github.repository }}",
-                    "imageUrl": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
-                    "imageType": "CIRCLE"
-                  },
-                  "sections": [
-                    {
-                      "header": "PR #${PR_NUMBER}: ${PR_TITLE}",
-                      "collapsible": false,
-                      "widgets": [
-                        { "decoratedText": { "topLabel": "Author", "text": "${PR_AUTHOR}" } },
-                        { "decoratedText": { "topLabel": "Action", "text": "${ACTION}" } },
-                        { "decoratedText": { "topLabel": "State", "text": "${PR_STATE}", "bottomText": "Draft: ${PR_DRAFT}" } },
-                        { "decoratedText": { "topLabel": "Base ← Head", "text": "${PR_BASE} \u2190 ${PR_HEAD}" } },
-                        { "decoratedText": { "topLabel": "Labels", "text": "${LABELS}" } },
-                        { "decoratedText": { "topLabel": "Reviewers", "text": "${REVIEWERS}" } },
-                        { "decoratedText": { "topLabel": "Changes", "text": "${PR_COMMITS} commits, +${PR_ADDITIONS}/-${PR_DELETIONS}, ${PR_CHANGED_FILES} files" } },
-                        {
-                          "buttonList": {
-                            "buttons": [
-                              { "text": "Open PR", "onClick": { "openLink": { "url": "${PR_URL}" } } },
-                              { "text": "Diff", "onClick": { "openLink": { "url": "${PR_URL}/files" } } },
-                              { "text": "Checks", "onClick": { "openLink": { "url": "${PR_URL}/checks" } } }
-                            ]
-                          }
-                        }
+            "cardsV2": [{
+              "cardId": "prNotification",
+              "card": {
+                "header": {
+                  "title": "🔀 Pull Request Notification",
+                  "subtitle": "Repository: ${{ github.repository }}",
+                  "imageUrl": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+                  "imageType": "CIRCLE"
+                },
+                "sections": [{
+                  "header": "PR #__PR_NUMBER__: __PR_TITLE__",
+                  "collapsible": false,
+                  "widgets": [
+                    { "decoratedText": { "topLabel": "Author",   "text": "__PR_AUTHOR__" } },
+                    { "decoratedText": { "topLabel": "Action",   "text": "${{ github.event.action }}" } },
+                    { "decoratedText": { "topLabel": "State",    "text": "__PR_STATE__", "bottomText": "Draft: __PR_DRAFT__" } },
+                    { "decoratedText": { "topLabel": "Base ← Head", "text": "__PR_BASE__ ← __PR_HEAD__" } },
+                    { "decoratedText": { "topLabel": "Labels",   "text": "__LABELS__" } },
+                    { "decoratedText": { "topLabel": "Reviewers","text": "__REVIEWERS__" } },
+                    { "decoratedText": { "topLabel": "Changes",  "text": "__PR_COMMITS__ commits, +__PR_ADDITIONS__/-__PR_DELETIONS__, __PR_CHANGED_FILES__ files" } },
+                    { "buttonList": {
+                      "buttons": [
+                        { "text": "Open PR", "onClick": { "openLink": { "url": "__PR_URL__" } } },
+                        { "text": "Diff",    "onClick": { "openLink": { "url": "__PR_URL__/files" } } },
+                        { "text": "Checks",  "onClick": { "openLink": { "url": "__PR_URL__/checks" } } }
                       ]
-                    }
+                    }}
                   ]
-                }
+                }]
               }
-            ]
+            }]
           }
           JSON
 
-          # Export ke environment untuk step berikutnya
-          echo "CARD=$(cat card.json | jq -c .)" >> $GITHUB_OUTPUT
+          # Substitusi placeholder manual biar aman dari shell expansion
+          sed -i \
+            -e "s|__PR_NUMBER__|${PR_NUMBER}|g" \
+            -e "s|__PR_TITLE__|$(printf '%s' "${PR_TITLE}"   | sed 's/[&/\]/\\&/g')|g" \
+            -e "s|__PR_AUTHOR__|${PR_AUTHOR}|g" \
+            -e "s|__PR_STATE__|${PR_STATE}|g" \
+            -e "s|__PR_DRAFT__|${PR_DRAFT}|g" \
+            -e "s|__PR_BASE__|${PR_BASE}|g" \
+            -e "s|__PR_HEAD__|${PR_HEAD}|g" \
+            -e "s|__LABELS__|$(printf '%s' "${LABELS}"    | sed 's/[&/\]/\\&/g')|g" \
+            -e "s|__REVIEWERS__|$(printf '%s' "${REVIEWERS}"| sed 's/[&/\]/\\&/g')|g" \
+            -e "s|__PR_COMMITS__|${PR_COMMITS}|g" \
+            -e "s|__PR_ADDITIONS__|${PR_ADDITIONS}|g" \
+            -e "s|__PR_DELETIONS__|${PR_DELETIONS}|g" \
+            -e "s|__PR_CHANGED_FILES__|${PR_CHANGED_FILES}|g" \
+            -e "s|__PR_URL__|${PR_URL}|g" payload.json
+
+          echo "payload=$(cat payload.json | tr -d '\n')" >> $GITHUB_OUTPUT
 
       - name: Send to Google Chat
         env:
           WEBHOOK: ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
-          PAYLOAD: ${{ steps.msg.outputs.CARD }}
+          PAYLOAD: ${{ steps.build.outputs.payload }}
         run: |
-          curl -sS -X POST -H "Content-Type: application/json" -d "${PAYLOAD}" "${WEBHOOK}" \
-          | jq -r '.' || true
+          if [ -z "$WEBHOOK" ]; then
+            echo "Missing GOOGLE_CHAT_WEBHOOK_URL secret"; exit 1
+          fi
+          curl -sS -X POST -H "Content-Type: application/json" \
+            -d "$PAYLOAD" "$WEBHOOK" | jq -r '.' || true
