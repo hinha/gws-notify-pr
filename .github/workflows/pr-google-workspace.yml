@@ -33,37 +33,40 @@ jobs:
 
           cat > payload.json <<'JSON'
           {
-            "cardsV2": [{
-              "cardId": "prNotification",
-              "card": {
-                "header": {
-                  "title": "🔀 Pull Request Notification",
-                  "subtitle": "Repository: ${{ github.repository }}",
-                  "imageUrl": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
-                  "imageType": "CIRCLE"
-                },
-                "sections": [{
-                  "header": "PR #__PR_NUMBER__: __PR_TITLE__",
-                  "collapsible": false,
-                  "widgets": [
-                    { "decoratedText": { "topLabel": "Author",   "text": "__PR_AUTHOR__" } },
-                    { "decoratedText": { "topLabel": "Action",   "text": "${{ github.event.action }}" } },
-                    { "decoratedText": { "topLabel": "State",    "text": "__PR_STATE__", "bottomText": "Draft: __PR_DRAFT__" } },
-                    { "decoratedText": { "topLabel": "Base ← Head", "text": "__PR_BASE__ ← __PR_HEAD__" } },
-                    { "decoratedText": { "topLabel": "Labels",   "text": "__LABELS__" } },
-                    { "decoratedText": { "topLabel": "Reviewers","text": "__REVIEWERS__" } },
-                    { "decoratedText": { "topLabel": "Changes",  "text": "__PR_COMMITS__ commits, +__PR_ADDITIONS__/-__PR_DELETIONS__, __PR_CHANGED_FILES__ files" } },
-                    { "buttonList": {
-                      "buttons": [
-                        { "text": "Open PR", "onClick": { "openLink": { "url": "__PR_URL__" } } },
-                        { "text": "Diff",    "onClick": { "openLink": { "url": "__PR_URL__/files" } } },
-                        { "text": "Checks",  "onClick": { "openLink": { "url": "__PR_URL__/checks" } } }
+            "cardsV2": [
+              {
+                "cardId": "prNotification",
+                "card": {
+                  "header": {
+                    "title": "🔀 Pull Request Notification",
+                    "subtitle": "Repository: hinha/gws-notify-pr",
+                    "imageUrl": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+                    "imageType": "CIRCLE"
+                  },
+                  "sections": [
+                    {
+                      "header": "PR #123: Fix build",
+                      "collapsible": false,
+                      "widgets": [
+                        { "decoratedText": { "topLabel": "Author", "text": "hinha" } },
+                        { "decoratedText": { "topLabel": "Action", "text": "opened" } },
+                        { "decoratedText": { "topLabel": "State", "text": "open", "bottomLabel": "Draft: false", "wrapText": true } },
+                        { "decoratedText": { "topLabel": "Base ← Head", "text": "main ← feature/x" } },
+                        {
+                          "buttonList": {
+                            "buttons": [
+                              { "text": "Open PR", "onClick": { "openLink": { "url": "https://github.com/org/repo/pull/123" } } },
+                              { "text": "Diff",    "onClick": { "openLink": { "url": "https://github.com/org/repo/pull/123/files" } } },
+                              { "text": "Checks",  "onClick": { "openLink": { "url": "https://github.com/org/repo/pull/123/checks" } } }
+                            ]
+                          }
+                        }
                       ]
-                    }}
+                    }
                   ]
-                }]
+                }
               }
-            }]
+            ]
           }
           JSON
 
