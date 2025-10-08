@@ -76,7 +76,8 @@ jobs:
           }
           JSON
 
-          # Substitusi placeholder aman dari shell expansion
+          # Substitutions
+          # Escape special characters in title, labels, reviewers
           sed -i \
             -e "s|__REPO__|${REPO}|g" \
             -e "s|__ACTION__|${ACTION}|g" \
@@ -106,18 +107,22 @@ jobs:
           if [ -z "$WEBHOOK" ]; then
             echo "Missing GOOGLE_CHAT_WEBHOOK_URL secret"; exit 1
           fi
-          
+
           sudo apt-get update -y && sudo apt-get install -y jq
-          
+
+          CLEAN=$(printf '%s' "$PAYLOAD" | jq 'if has("message") then .message else . end | del(.threadKey)')
+
+          echo "$CLEAN" | jq 'keys'
+
           THREAD="pr-${PR_NUMBER}"
           THREAD_ENC=$(printf '%s' "$THREAD" | jq -sRr @uri)
-          
-          # append threadKey di query string
+
           if [[ "$WEBHOOK" == *\?* ]]; then
             URL="${WEBHOOK}&threadKey=${THREAD_ENC}"
           else
             URL="${WEBHOOK}?threadKey=${THREAD_ENC}"
           fi
-          
-          curl -sS -X POST -H "Content-Type: application/json" \
-               -d "$PAYLOAD" "$URL" | jq -r '.' || true
+
+          # Send message
+          curl -sS -X POST -H "Content-Type: application/json; charset=UTF-8" \
+               -d "$CLEAN" "$URL" | jq -r '.' || true
