@@ -4,6 +4,10 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft, labeled, unlabeled, closed]
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   notify:
     runs-on: ubuntu-latest
@@ -71,40 +75,63 @@ jobs:
                   ]
                 }
               }
-            ],
-            "threadKey": "pr-__PR_NUMBER__"
+            ]
           }
           JSON
 
-          # Substitutions
-          # Escape special characters in title, labels, reviewers
           sed -i \
             -e "s|__REPO__|${REPO}|g" \
             -e "s|__ACTION__|${ACTION}|g" \
             -e "s|__PR_NUMBER__|${PR_NUMBER}|g" \
-            -e "s|__PR_TITLE__|$(printf '%s' "${PR_TITLE}"   | sed 's/[&/\]/\\&/g')|g" \
+            -e "s|__PR_TITLE__|$(printf '%s' "${PR_TITLE}" | sed 's/[&/\]/\\&/g')|g" \
             -e "s|__PR_AUTHOR__|${PR_AUTHOR}|g" \
             -e "s|__PR_STATE__|${PR_STATE}|g" \
             -e "s|__PR_DRAFT__|${PR_DRAFT}|g" \
             -e "s|__PR_BASE__|${PR_BASE}|g" \
             -e "s|__PR_HEAD__|${PR_HEAD}|g" \
-            -e "s|__LABELS__|$(printf '%s' "${LABELS}"    | sed 's/[&/\]/\\&/g')|g" \
-            -e "s|__REVIEWERS__|$(printf '%s' "${REVIEWERS}"| sed 's/[&/\]/\\&/g')|g" \
+            -e "s|__LABELS__|$(printf '%s' "${LABELS}" | sed 's/[&/\]/\\&/g')|g" \
+            -e "s|__REVIEWERS__|$(printf '%s' "${REVIEWERS}" | sed 's/[&/\]/\\&/g')|g" \
             -e "s|__PR_COMMITS__|${PR_COMMITS}|g" \
             -e "s|__PR_ADDITIONS__|${PR_ADDITIONS}|g" \
             -e "s|__PR_DELETIONS__|${PR_DELETIONS}|g" \
             -e "s|__PR_CHANGED_FILES__|${PR_CHANGED_FILES}|g" \
             -e "s|__PR_URL__|${PR_URL}|g" payload.json
 
-          echo "payload=$(cat payload.json | tr -d '\n')" >> $GITHUB_OUTPUT
+          echo "payload=$(tr -d '\n' < payload.json)" >> $GITHUB_OUTPUT
+          echo "action=${ACTION}" >> $GITHUB_OUTPUT
 
-      - name: Send to Google Chat
+      - name: Fetch PR commits (last 5)
+        id: commits
+        if: ${{ steps.build.outputs.action == 'synchronize' }}
         env:
-          WEBHOOK: ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
-          PAYLOAD: ${{ steps.build.outputs.payload }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO:     ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y jq
+          # Ambil hingga 50 commit, lalu ambil 5 terakhir
+          COMMITS_JSON=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=50")
+
+          # Format: shortSHA – title (author)
+          COMMITS_TEXT=$(echo "$COMMITS_JSON" | jq -r '.[-5:] | map("* " + (.sha[0:7]) + " – " + (.commit.message | split("\n")[0]) + " (@" + .author.login + ")") | join("\n")')
+          # Fallback kalau kosong
+          if [ -z "$COMMITS_TEXT" ] || [ "$COMMITS_TEXT" == "null" ]; then
+            COMMITS_TEXT="(no commits found)"
+          fi
+          # Simpan output satu baris (escape newline untuk JSON/text)
+          echo "commits=$(printf '%s' "$COMMITS_TEXT" | awk '{printf "%s\\n",$0}')" >> $GITHUB_OUTPUT
+
+      - name: Send to Google Chat (mention + card + commits)
+        env:
+          WEBHOOK:  ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
+          PAYLOAD:  ${{ steps.build.outputs.payload }}
+          ACTION:   ${{ steps.build.outputs.action }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE:  ${{ github.event.pull_request.title }}
+          PR_URL:    ${{ github.event.pull_request.html_url }}
+          COMMITS:   ${{ steps.commits.outputs.commits }}
         run: |
           if [ -z "$WEBHOOK" ]; then
             echo "Missing GOOGLE_CHAT_WEBHOOK_URL secret"; exit 1
@@ -114,19 +141,22 @@ jobs:
 
           THREAD="pr-${PR_NUMBER}"
           THREAD_ENC=$(printf '%s' "$THREAD" | jq -sRr @uri)
-
           if [[ "$WEBHOOK" == *\?* ]]; then
             URL="${WEBHOOK}&threadKey=${THREAD_ENC}"
           else
             URL="${WEBHOOK}?threadKey=${THREAD_ENC}"
           fi
 
-          # 1) Ping @all (plain text) 
-          MENTION_PAYLOAD=$(jq -n --arg t "<users/all> PR #${PR_NUMBER}: ${PR_TITLE} — ${PR_URL}" '{text: $t}')
-          curl -sS -X POST -H "Content-Type: application/json; charset=UTF-8" \
-               -d "$MENTION_PAYLOAD" "$URL" | jq -r '.' || true
+          # 1) Mention @all
+          MENTION=$(jq -n --arg t "<users/all> PR #${PR_NUMBER}: ${PR_TITLE} — ${PR_URL}" '{text: $t}')
+          curl -sS -X POST -H "Content-Type: application/json; charset=UTF-8" -d "$MENTION" "$URL" | jq -r '.' || true
 
-          # 2) send card
+          # 2) Kalau synchronize, kirim ringkasan commits
+          if [ "$ACTION" = "synchronize" ]; then
+            COMM_PAYLOAD=$(jq -n --arg c "$COMMITS" '{text: ("New commits:\n" + $c)}')
+            curl -sS -X POST -H "Content-Type: application/json; charset=UTF-8" -d "$COMM_PAYLOAD" "$URL" | jq -r '.' || true
+          fi
+
+          # 3) Kirim card
           CLEAN=$(printf '%s' "$PAYLOAD" | jq 'if has("message") then .message else . end | del(.threadKey)')
-          curl -sS -X POST -H "Content-Type: application/json; charset=UTF-8" \
-               -d "$CLEAN" "$URL" | jq -r '.' || true
+          curl -sS -X POST -H "Content-Type: application/json; charset=UTF-8" -d "$CLEAN" "$URL" | jq -r '.' || true
